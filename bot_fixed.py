@@ -242,6 +242,22 @@ class TelegramYTBot:
                     audio_path = await loop.run_in_executor(None, self.downloader.convert_to_mp3, video_path)
                 
                 if audio_path:
+                    # Проверяем размер файла
+                    file_size = os.path.getsize(audio_path)
+                    max_size = 50 * 1024 * 1024  # 50 MB лимит для аудио в Telegram
+                    
+                    if file_size > max_size:
+                        size_mb = file_size / (1024 * 1024)
+                        await query.edit_message_text(
+                            f"❌ Аудио файл слишком большой ({size_mb:.1f} MB).\n"
+                            f"Максимальный размер для аудио: 50 MB.\n"
+                            f"Попробуйте выбрать видео вместо аудио."
+                        )
+                        self.downloader.cleanup_file(video_path)
+                        if audio_path != video_path:
+                            self.downloader.cleanup_file(audio_path)
+                        return
+                    
                     if not video_path.endswith('.mp3'):
                         await query.edit_message_text("📤 Отправляю аудио...")
                     
@@ -264,6 +280,20 @@ class TelegramYTBot:
                 else:
                     await query.edit_message_text("❌ Ошибка при конвертации в MP3.")
             else:
+                # Проверяем размер видео файла
+                file_size = os.path.getsize(video_path)
+                max_size = 2000 * 1024 * 1024  # 2000 MB (почти 2GB) лимит для видео в Telegram
+                
+                if file_size > max_size:
+                    size_mb = file_size / (1024 * 1024)
+                    await query.edit_message_text(
+                        f"❌ Видео файл слишком большой ({size_mb:.1f} MB).\n"
+                        f"Максимальный размер для видео: 2000 MB.\n"
+                        f"Попробуйте выбрать более низкое качество."
+                    )
+                    self.downloader.cleanup_file(video_path)
+                    return
+                
                 await query.edit_message_text("📤 Отправляю видео...")
                 
                 with open(video_path, 'rb') as video_file:

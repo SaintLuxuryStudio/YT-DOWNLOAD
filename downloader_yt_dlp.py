@@ -297,7 +297,7 @@ class YouTubeDownloader:
             (
                 ffmpeg
                 .input(video_path)
-                .output(audio_path, acodec='mp3', audio_bitrate='192k')
+                .output(audio_path, acodec='mp3', audio_bitrate='64k')
                 .overwrite_output()
                 .run(quiet=True)
             )
