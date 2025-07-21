@@ -26,10 +26,6 @@ class YouTubeDownloader:
             'writesubtitles': False,
             'writeautomaticsub': False,
             'merge_output_format': 'mp4',  # Объединяем в mp4
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
         }
     
     def get_video_info(self, url: str) -> Optional[dict]:
@@ -112,14 +108,10 @@ class YouTubeDownloader:
             opts = self.ydl_opts.copy()
             
             if resolution == 'audio':
-                # Для аудио - выбираем лучший аудио формат
-                opts['format'] = 'bestaudio/best'
-                opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }]
-                logger.info("Using audio format: bestaudio -> mp3")
+                # Для аудио - просто скачиваем аудио и конвертируем отдельно
+                opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best'
+                # Убираем автоматическую конвертацию, сделаем это вручную
+                logger.info("Using audio format: bestaudio")
                 
             elif resolution and resolution != 'audio':
                 # Для видео - простая логика выбора качества
@@ -267,17 +259,21 @@ class YouTubeDownloader:
     def _find_downloaded_file(self, title: str) -> Optional[str]:
         try:
             # Ищем файлы с медиа расширениями
-            media_extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mp3', '.m4a']
+            media_extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mp3', '.m4a', '.opus', '.aac']
+            
+            # Сначала ищем по имени
+            clean_title = title.replace('/', '_').replace('"', '').replace("'", '')[:50]
             
             for file in os.listdir(self.download_dir):
                 file_path = os.path.join(self.download_dir, file)
                 
                 # Проверяем по имени файла и расширению
                 if any(file.endswith(ext) for ext in media_extensions):
-                    if title.replace('/', '_')[:30] in file or file.startswith(title[:20]):
+                    if clean_title[:20] in file:
+                        logger.info(f"Found file by name: {file_path}")
                         return file_path
             
-            # Ищем последний созданный медиа файл
+            # Если не нашли по имени, ищем последний созданный медиа файл
             media_files = []
             for file in os.listdir(self.download_dir):
                 if any(file.endswith(ext) for ext in media_extensions):
@@ -285,7 +281,7 @@ class YouTubeDownloader:
             
             if media_files:
                 latest_file = max(media_files, key=os.path.getctime)
-                logger.info(f"Found downloaded file: {latest_file}")
+                logger.info(f"Found latest file: {latest_file}")
                 return latest_file
                 
         except Exception as e:
