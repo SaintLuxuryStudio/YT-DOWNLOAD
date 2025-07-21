@@ -111,7 +111,17 @@ class YouTubeDownloader:
             # Полностью переработанная логика выбора формата
             opts = self.ydl_opts.copy()
             
-            if resolution and resolution != 'audio':
+            if resolution == 'audio':
+                # Для аудио - выбираем лучший аудио формат
+                opts['format'] = 'bestaudio/best'
+                opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
+                logger.info("Using audio format: bestaudio -> mp3")
+                
+            elif resolution and resolution != 'audio':
                 # Для видео - простая логика выбора качества
                 height = resolution.replace("p", "")
                 
@@ -244,25 +254,25 @@ class YouTubeDownloader:
     
     def _find_downloaded_file(self, title: str) -> Optional[str]:
         try:
-            # Ищем файлы с видео расширениями
-            video_extensions = ['.mp4', '.mkv', '.webm', '.avi']
+            # Ищем файлы с медиа расширениями
+            media_extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mp3', '.m4a']
             
             for file in os.listdir(self.download_dir):
                 file_path = os.path.join(self.download_dir, file)
                 
                 # Проверяем по имени файла и расширению
-                if any(file.endswith(ext) for ext in video_extensions):
+                if any(file.endswith(ext) for ext in media_extensions):
                     if title.replace('/', '_')[:30] in file or file.startswith(title[:20]):
                         return file_path
             
-            # Ищем последний созданный видео файл
-            video_files = []
+            # Ищем последний созданный медиа файл
+            media_files = []
             for file in os.listdir(self.download_dir):
-                if any(file.endswith(ext) for ext in video_extensions):
-                    video_files.append(os.path.join(self.download_dir, file))
+                if any(file.endswith(ext) for ext in media_extensions):
+                    media_files.append(os.path.join(self.download_dir, file))
             
-            if video_files:
-                latest_file = max(video_files, key=os.path.getctime)
+            if media_files:
+                latest_file = max(media_files, key=os.path.getctime)
                 logger.info(f"Found downloaded file: {latest_file}")
                 return latest_file
                 

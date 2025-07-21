@@ -164,7 +164,7 @@ class TelegramYTBot:
         callback_data = query.data
         
         if callback_data == "audio":
-            await self.download_and_send_callback(query, context, audio_only=True)
+            await self.download_and_send_callback(query, context, resolution="audio", audio_only=True)
         elif callback_data.startswith("video_"):
             resolution = callback_data.replace("video_", "")
             await self.download_and_send_callback(query, context, resolution=resolution)
@@ -198,11 +198,17 @@ class TelegramYTBot:
             video_path, title = result
             
             if audio_only:
-                await query.edit_message_text("🎵 Конвертирую в MP3...")
-                audio_path = await loop.run_in_executor(None, self.downloader.convert_to_mp3, video_path)
+                # Проверяем, уже ли это MP3 файл
+                if video_path.endswith('.mp3'):
+                    audio_path = video_path
+                    await query.edit_message_text("📤 Отправляю аудио...")
+                else:
+                    await query.edit_message_text("🎵 Конвертирую в MP3...")
+                    audio_path = await loop.run_in_executor(None, self.downloader.convert_to_mp3, video_path)
                 
                 if audio_path:
-                    await query.edit_message_text("📤 Отправляю аудио...")
+                    if not video_path.endswith('.mp3'):
+                        await query.edit_message_text("📤 Отправляю аудио...")
                     
                     with open(audio_path, 'rb') as audio_file:
                         await context.bot.send_audio(
@@ -217,7 +223,8 @@ class TelegramYTBot:
                         )
                     
                     self.downloader.cleanup_file(video_path)
-                    self.downloader.cleanup_file(audio_path)
+                    if audio_path != video_path:
+                        self.downloader.cleanup_file(audio_path)
                     await query.edit_message_text("✅ Аудио отправлено!")
                 else:
                     await query.edit_message_text("❌ Ошибка при конвертации в MP3.")
