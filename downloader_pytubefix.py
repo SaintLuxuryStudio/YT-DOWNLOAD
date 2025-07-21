@@ -103,73 +103,48 @@ class YouTubeDownloader:
                 
             elif resolution:
                 # Скачиваем видео определенного качества
-                # Сначала пробуем прогрессивный поток (видео+аудио)
-                progressive_stream = yt.streams.filter(progressive=True, res=resolution).first()
-                
-                if progressive_stream:
-                    if not self.check_file_size(progressive_stream):
-                        return None
-                        
-                    file_path = progressive_stream.download(output_path=self.download_dir)
-                    logger.info(f"Progressive video download completed: {file_path}")
-                    return file_path, title
-                
-                # Если нет прогрессивного, пробуем ближайшее качество
-                all_progressive = yt.streams.filter(progressive=True).order_by('resolution').desc()
                 target_height = int(resolution.replace('p', ''))
                 
-                for stream in all_progressive:
-                    if stream.resolution:
-                        stream_height = int(stream.resolution.replace('p', ''))
-                        if stream_height <= target_height:
-                            if self.check_file_size(stream):
+                # Сначала пробуем прогрессивный поток (работает только до 720p)
+                if target_height <= 720:
+                    progressive_stream = yt.streams.filter(progressive=True, res=resolution).first()
+                    if progressive_stream and self.check_file_size(progressive_stream):
+                        file_path = progressive_stream.download(output_path=self.download_dir)
+                        logger.info(f"Progressive video download completed: {file_path}")
+                        return file_path, title
+                    
+                    # Попробуем ближайшее прогрессивное качество
+                    all_progressive = yt.streams.filter(progressive=True).order_by('resolution').desc()
+                    for stream in all_progressive:
+                        if stream.resolution:
+                            stream_height = int(stream.resolution.replace('p', ''))
+                            if stream_height <= target_height and self.check_file_size(stream):
                                 file_path = stream.download(output_path=self.download_dir)
-                                logger.info(f"Best available progressive video ({stream.resolution}) download completed: {file_path}")
+                                logger.info(f"Best progressive video ({stream.resolution}) download completed: {file_path}")
                                 return file_path, title
                 
-                # В крайнем случае пробуем адаптивные потоки
-                video_stream = yt.streams.filter(adaptive=True, res=resolution, only_video=True).first()
-                audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+                # Для высоких разрешений используем адаптивные потоки без FFmpeg
+                # Просто скачиваем лучший доступный прогрессивный поток
+                best_progressive = yt.streams.filter(progressive=True).order_by('resolution').desc().first()
+                if best_progressive and self.check_file_size(best_progressive):
+                    file_path = best_progressive.download(output_path=self.download_dir)
+                    logger.info(f"Best available video ({best_progressive.resolution}) download completed: {file_path}")
+                    return file_path, title
                 
-                if video_stream and audio_stream:
-                    if not self.check_file_size(video_stream) or not self.check_file_size(audio_stream):
-                        return None
-                        
-                    try:
-                        # Скачиваем видео и аудио отдельно
-                        video_path = video_stream.download(output_path=self.download_dir, filename_prefix='video_')
-                        audio_path = audio_stream.download(output_path=self.download_dir, filename_prefix='audio_')
-                        
-                        # Объединяем с помощью ffmpeg
-                        output_path = os.path.join(self.download_dir, f"{self._clean_filename(title)}.mp4")
-                        self._merge_video_audio(video_path, audio_path, output_path)
-                        
-                        # Удаляем временные файлы
-                        self.cleanup_file(video_path)
-                        self.cleanup_file(audio_path)
-                        
-                        logger.info(f"Merged video download completed: {output_path}")
-                        return output_path, title
-                    except Exception as merge_error:
-                        logger.error(f"Merge failed: {merge_error}")
-                        # Возвращаем только видео если merge не удался
-                        logger.info(f"Returning video-only file: {video_path}")
-                        return video_path, title
-                else:
-                    logger.error(f"No streams found for resolution {resolution}")
-                    return None
+                logger.error(f"No suitable streams found for resolution {resolution}")
+                return None
             else:
-                # Скачиваем лучшее качество
-                stream = yt.streams.get_highest_resolution()
-                if not stream:
-                    logger.error("No streams found")
+                # Скачиваем лучшее доступное прогрессивное качество
+                best_stream = yt.streams.filter(progressive=True).order_by('resolution').desc().first()
+                if not best_stream:
+                    logger.error("No progressive streams found")
                     return None
                     
-                if not self.check_file_size(stream):
+                if not self.check_file_size(best_stream):
                     return None
                     
-                file_path = stream.download(output_path=self.download_dir)
-                logger.info(f"Best quality download completed: {file_path}")
+                file_path = best_stream.download(output_path=self.download_dir)
+                logger.info(f"Best quality download ({best_stream.resolution}) completed: {file_path}")
                 return file_path, title
                 
         except Exception as e:
