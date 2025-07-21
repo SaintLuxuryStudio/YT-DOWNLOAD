@@ -19,6 +19,9 @@ class YouTubeDownloader:
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
         
+        # Путь к файлу с куками
+        cookies_path = os.path.join(download_dir, 'youtube_cookies.txt')
+        
         self.ydl_opts = {
             'outtmpl': f'{download_dir}/%(title)s.%(ext)s',
             'format': 'best',  # Будем задавать конкретный формат в download_video
@@ -27,10 +30,22 @@ class YouTubeDownloader:
             'writeautomaticsub': False,
             'merge_output_format': 'mp4',  # Объединяем в mp4
         }
+        
+        # Добавляем куки если файл существует
+        if os.path.exists(cookies_path):
+            self.ydl_opts['cookiefile'] = cookies_path
+            logger.info(f"Using cookies from {cookies_path}")
+        else:
+            logger.warning(f"No cookies file found at {cookies_path}")
     
     def get_video_info(self, url: str) -> Optional[dict]:
         try:
-            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            opts = {'quiet': True}
+            # Добавляем куки если они есть
+            if 'cookiefile' in self.ydl_opts:
+                opts['cookiefile'] = self.ydl_opts['cookiefile']
+                
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 logger.info(f"Video found: {info.get('title', 'Unknown')}")
                 return info
@@ -118,7 +133,10 @@ class YouTubeDownloader:
                 height = resolution.replace("p", "")
                 
                 # Сначала получаем все доступные форматы
-                with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                opts = {'quiet': True}
+                if 'cookiefile' in self.ydl_opts:
+                    opts['cookiefile'] = self.ydl_opts['cookiefile']
+                with yt_dlp.YoutubeDL(opts) as ydl:
                     try:
                         formats_info = ydl.extract_info(url, download=False)
                         available_formats = formats_info.get('formats', [])
