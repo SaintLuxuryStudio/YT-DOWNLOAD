@@ -104,17 +104,38 @@ class YouTubeDownloader:
             elif resolution:
                 # Скачиваем видео определенного качества
                 # Сначала пробуем прогрессивный поток (видео+аудио)
-                stream = yt.streams.filter(progressive=True, res=resolution).first()
+                progressive_stream = yt.streams.filter(progressive=True, res=resolution).first()
                 
-                if not stream:
-                    # Если нет прогрессивного, пробуем адаптивный (только видео)
-                    video_stream = yt.streams.filter(adaptive=True, res=resolution, only_video=True).first()
-                    audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
-                    
-                    if video_stream and audio_stream:
-                        if not self.check_file_size(video_stream) or not self.check_file_size(audio_stream):
-                            return None
-                            
+                if progressive_stream:
+                    if not self.check_file_size(progressive_stream):
+                        return None
+                        
+                    file_path = progressive_stream.download(output_path=self.download_dir)
+                    logger.info(f"Progressive video download completed: {file_path}")
+                    return file_path, title
+                
+                # Если нет прогрессивного, пробуем ближайшее качество
+                all_progressive = yt.streams.filter(progressive=True).order_by('resolution').desc()
+                target_height = int(resolution.replace('p', ''))
+                
+                for stream in all_progressive:
+                    if stream.resolution:
+                        stream_height = int(stream.resolution.replace('p', ''))
+                        if stream_height <= target_height:
+                            if self.check_file_size(stream):
+                                file_path = stream.download(output_path=self.download_dir)
+                                logger.info(f"Best available progressive video ({stream.resolution}) download completed: {file_path}")
+                                return file_path, title
+                
+                # В крайнем случае пробуем адаптивные потоки
+                video_stream = yt.streams.filter(adaptive=True, res=resolution, only_video=True).first()
+                audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+                
+                if video_stream and audio_stream:
+                    if not self.check_file_size(video_stream) or not self.check_file_size(audio_stream):
+                        return None
+                        
+                    try:
                         # Скачиваем видео и аудио отдельно
                         video_path = video_stream.download(output_path=self.download_dir, filename_prefix='video_')
                         audio_path = audio_stream.download(output_path=self.download_dir, filename_prefix='audio_')
@@ -129,16 +150,14 @@ class YouTubeDownloader:
                         
                         logger.info(f"Merged video download completed: {output_path}")
                         return output_path, title
-                    else:
-                        logger.error(f"No streams found for resolution {resolution}")
-                        return None
+                    except Exception as merge_error:
+                        logger.error(f"Merge failed: {merge_error}")
+                        # Возвращаем только видео если merge не удался
+                        logger.info(f"Returning video-only file: {video_path}")
+                        return video_path, title
                 else:
-                    if not self.check_file_size(stream):
-                        return None
-                        
-                    file_path = stream.download(output_path=self.download_dir)
-                    logger.info(f"Progressive video download completed: {file_path}")
-                    return file_path, title
+                    logger.error(f"No streams found for resolution {resolution}")
+                    return None
             else:
                 # Скачиваем лучшее качество
                 stream = yt.streams.get_highest_resolution()
@@ -165,19 +184,38 @@ class YouTubeDownloader:
     def _merge_video_audio(self, video_path: str, audio_path: str, output_path: str):
         """Объединяет видео и аудио файлы"""
         try:
+            # Проверяем что исходные файлы существуют и не пустые
+            if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+                raise Exception(f"Video file is missing or empty: {video_path}")
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+                raise Exception(f"Audio file is missing or empty: {audio_path}")
+            
+            logger.info(f"Merging video ({os.path.getsize(video_path)} bytes) with audio ({os.path.getsize(audio_path)} bytes)")
+            
+            # Используем более безопасные параметры ffmpeg
             (
                 ffmpeg
+                .input(video_path)
+                .input(audio_path)
                 .output(
-                    ffmpeg.input(video_path), 
-                    ffmpeg.input(audio_path), 
                     output_path,
                     vcodec='copy',
-                    acodec='copy'
+                    acodec='aac',  # Конвертируем аудио в AAC для совместимости
+                    strict='experimental'
                 )
                 .overwrite_output()
-                .run(quiet=True)
+                .run(quiet=False, capture_stdout=True, capture_stderr=True)
             )
-            logger.info(f"Successfully merged video and audio to {output_path}")
+            
+            # Проверяем что результат не пустой
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise Exception(f"Merged file is empty or wasn't created: {output_path}")
+                
+            logger.info(f"Successfully merged to {output_path} ({os.path.getsize(output_path)} bytes)")
+            
+        except ffmpeg.Error as e:
+            logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
+            raise
         except Exception as e:
             logger.error(f"Error merging video and audio: {e}")
             raise
