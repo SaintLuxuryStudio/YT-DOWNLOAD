@@ -5,7 +5,7 @@ import asyncio
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from downloader_yt_dlp import YouTubeDownloader
+from downloader_pytubefix import YouTubeDownloader
 
 load_dotenv()
 

@@ -1,4 +1,4 @@
-yt-dlp==2024.12.13
+pytubefix
 ffmpeg-python==0.2.0
 python-telegram-bot==21.9
 python-dotenv==1.0.0
