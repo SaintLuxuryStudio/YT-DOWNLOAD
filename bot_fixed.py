@@ -86,6 +86,33 @@ class TelegramYTBot:
         progress_callback.progress_data = progress_data
         return progress_callback
     
+    def split_large_file(self, file_path: str, max_size: int = 50 * 1024 * 1024) -> list:
+        """Разбивает большой файл на части"""
+        try:
+            file_size = os.path.getsize(file_path)
+            if file_size <= max_size:
+                return [file_path]
+            
+            part_files = []
+            with open(file_path, 'rb') as f:
+                part_num = 1
+                while True:
+                    chunk = f.read(max_size)
+                    if not chunk:
+                        break
+                    
+                    part_path = f"{file_path}.part{part_num:03d}"
+                    with open(part_path, 'wb') as part_file:
+                        part_file.write(chunk)
+                    
+                    part_files.append(part_path)
+                    part_num += 1
+            
+            return part_files
+        except Exception as e:
+            logger.error(f"Error splitting file: {e}")
+            return [file_path]
+    
     async def update_progress_periodically(self, progress_callback, query):
         """Периодически обновляет прогресс в сообщении"""
         last_shown_progress = 0
@@ -282,31 +309,89 @@ class TelegramYTBot:
             else:
                 # Проверяем размер видео файла
                 file_size = os.path.getsize(video_path)
-                max_size = 2000 * 1024 * 1024  # 2000 MB (почти 2GB) лимит для видео в Telegram
+                size_mb = file_size / (1024 * 1024)
+                
+                # Более строгий лимит для надежной отправки
+                max_size = 50 * 1024 * 1024  # 50 MB лимит для надежной отправки
                 
                 if file_size > max_size:
-                    size_mb = file_size / (1024 * 1024)
+                    # Предлагаем разбить файл на части
                     await query.edit_message_text(
-                        f"❌ Видео файл слишком большой ({size_mb:.1f} MB).\n"
-                        f"Максимальный размер для видео: 2000 MB.\n"
-                        f"Попробуйте выбрать более низкое качество."
+                        f"📁 Видео файл большой ({size_mb:.1f} MB).\n"
+                        f"Разбиваю на части для отправки..."
                     )
+                    
+                    part_files = self.split_large_file(video_path)
+                    
+                    if len(part_files) > 1:
+                        await query.edit_message_text(f"📤 Отправляю видео ({len(part_files)} частей)...")
+                        
+                        for i, part_path in enumerate(part_files, 1):
+                            try:
+                                with open(part_path, 'rb') as part_file:
+                                    await context.bot.send_document(
+                                        chat_id=query.message.chat_id,
+                                        document=part_file,
+                                        caption=f"📹 {title} (часть {i}/{len(part_files)})",
+                                        read_timeout=600,
+                                        write_timeout=600,
+                                        connect_timeout=120,
+                                        pool_timeout=120
+                                    )
+                                # Удаляем часть после отправки
+                                os.remove(part_path)
+                            except Exception as e:
+                                logger.error(f"Error sending part {i}: {e}")
+                                await query.edit_message_text(f"❌ Ошибка при отправке части {i}")
+                                return
+                        
+                        await query.edit_message_text(f"✅ Видео отправлено ({len(part_files)} частей)!")
+                    else:
+                        # Если не удалось разбить, отправляем как обычно
+                        await query.edit_message_text("📤 Отправляю видео...")
+                        try:
+                            with open(video_path, 'rb') as video_file:
+                                await context.bot.send_video(
+                                    chat_id=query.message.chat_id,
+                                    video=video_file,
+                                    caption=f"📹 {title}",
+                                    supports_streaming=True,
+                                    read_timeout=600,
+                                    write_timeout=600,
+                                    connect_timeout=120,
+                                    pool_timeout=120
+                                )
+                        except Exception as e:
+                            logger.error(f"Error sending video: {e}")
+                            await query.edit_message_text("❌ Ошибка при отправке видео")
+                            return
+                    
                     self.downloader.cleanup_file(video_path)
                     return
                 
+                # Если файл не большой, отправляем как обычно
                 await query.edit_message_text("📤 Отправляю видео...")
                 
-                with open(video_path, 'rb') as video_file:
-                    await context.bot.send_video(
-                        chat_id=query.message.chat_id,
-                        video=video_file,
-                        caption=f"📹 {title}",
-                        supports_streaming=True,
-                        read_timeout=300,
-                        write_timeout=300,
-                        connect_timeout=60,
-                        pool_timeout=60
-                    )
+                # Retry логика для отправки видео
+                for attempt in range(3):  # 3 попытки
+                    try:
+                        with open(video_path, 'rb') as video_file:
+                            await context.bot.send_video(
+                                chat_id=query.message.chat_id,
+                                video=video_file,
+                                caption=f"📹 {title}",
+                                supports_streaming=True,
+                                read_timeout=600,  # Увеличиваем таймауты
+                                write_timeout=600,
+                                connect_timeout=120,
+                                pool_timeout=120
+                            )
+                        break  # Успешно отправили, выходим из цикла
+                    except Exception as send_error:
+                        logger.error(f"Video send attempt {attempt + 1} failed: {send_error}")
+                        if attempt == 2:  # Последняя попытка
+                            raise  # Перебрасываем исключение
+                        await asyncio.sleep(5)  # Пауза перед повторной попыткой
                 
                 self.downloader.cleanup_file(video_path)
                 await query.edit_message_text("✅ Видео отправлено!")
@@ -367,15 +452,90 @@ class TelegramYTBot:
                 else:
                     await status_message.edit_text("❌ Ошибка при конвертации в MP3.")
             else:
+                # Проверяем размер видео файла
+                file_size = os.path.getsize(video_path)
+                size_mb = file_size / (1024 * 1024)
+                
+                # Более строгий лимит для надежной отправки
+                max_size = 50 * 1024 * 1024  # 50 MB лимит для надежной отправки
+                
+                if file_size > max_size:
+                    # Предлагаем разбить файл на части
+                    await status_message.edit_text(
+                        f"📁 Видео файл большой ({size_mb:.1f} MB).\n"
+                        f"Разбиваю на части для отправки..."
+                    )
+                    
+                    part_files = self.split_large_file(video_path)
+                    
+                    if len(part_files) > 1:
+                        await status_message.edit_text(f"📤 Отправляю видео ({len(part_files)} частей)...")
+                        
+                        for i, part_path in enumerate(part_files, 1):
+                            try:
+                                with open(part_path, 'rb') as part_file:
+                                    await context.bot.send_document(
+                                        chat_id=update.effective_chat.id,
+                                        document=part_file,
+                                        caption=f"📹 {title} (часть {i}/{len(part_files)})",
+                                        read_timeout=600,
+                                        write_timeout=600,
+                                        connect_timeout=120,
+                                        pool_timeout=120
+                                    )
+                                # Удаляем часть после отправки
+                                os.remove(part_path)
+                            except Exception as e:
+                                logger.error(f"Error sending part {i}: {e}")
+                                await status_message.edit_text(f"❌ Ошибка при отправке части {i}")
+                                return
+                        
+                        await status_message.edit_text(f"✅ Видео отправлено ({len(part_files)} частей)!")
+                    else:
+                        # Если не удалось разбить, отправляем как обычно
+                        await status_message.edit_text("📤 Отправляю видео...")
+                        try:
+                            with open(video_path, 'rb') as video_file:
+                                await context.bot.send_video(
+                                    chat_id=update.effective_chat.id,
+                                    video=video_file,
+                                    caption=f"📹 {title}",
+                                    supports_streaming=True,
+                                    read_timeout=600,
+                                    write_timeout=600,
+                                    connect_timeout=120,
+                                    pool_timeout=120
+                                )
+                        except Exception as e:
+                            logger.error(f"Error sending video: {e}")
+                            await status_message.edit_text("❌ Ошибка при отправке видео")
+                            return
+                    
+                    self.downloader.cleanup_file(video_path)
+                    return
+                
                 await status_message.edit_text("📤 Отправляю видео...")
                 
-                with open(video_path, 'rb') as video_file:
-                    await context.bot.send_video(
-                        chat_id=update.effective_chat.id,
-                        video=video_file,
-                        caption=f"📹 {title}",
-                        supports_streaming=True
-                    )
+                # Retry логика для отправки видео
+                for attempt in range(3):  # 3 попытки
+                    try:
+                        with open(video_path, 'rb') as video_file:
+                            await context.bot.send_video(
+                                chat_id=update.effective_chat.id,
+                                video=video_file,
+                                caption=f"📹 {title}",
+                                supports_streaming=True,
+                                read_timeout=600,  # Увеличиваем таймауты
+                                write_timeout=600,
+                                connect_timeout=120,
+                                pool_timeout=120
+                            )
+                        break  # Успешно отправили, выходим из цикла
+                    except Exception as send_error:
+                        logger.error(f"Video send attempt {attempt + 1} failed: {send_error}")
+                        if attempt == 2:  # Последняя попытка
+                            raise  # Перебрасываем исключение
+                        await asyncio.sleep(5)  # Пауза перед повторной попыткой
                 
                 self.downloader.cleanup_file(video_path)
                 await status_message.edit_text("✅ Видео отправлено!")
