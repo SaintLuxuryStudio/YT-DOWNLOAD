@@ -232,23 +232,35 @@ class YouTubeDownloader:
     
     def _wrap_progress_callback(self, callback):
         def progress_hook(d):
-            if d['status'] == 'downloading':
-                try:
+            try:
+                if d['status'] == 'downloading':
                     downloaded = d.get('downloaded_bytes', 0)
                     total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
                     
                     if total > 0:
-                        # Создаем фейковый stream объект для совместимости
+                        # Создаем фейковый stream объект
                         class FakeStream:
                             def __init__(self, filesize):
                                 self.filesize = filesize
                         
                         fake_stream = FakeStream(total)
                         bytes_remaining = total - downloaded
+                        
+                        # Вызываем оригинальный callback
                         callback(fake_stream, None, bytes_remaining)
                         
-                except Exception as e:
-                    logger.error(f"Progress callback error: {e}")
+                elif d['status'] == 'finished':
+                    # 100% когда закончили
+                    class FakeStream:
+                        def __init__(self, filesize):
+                            self.filesize = filesize
+                    
+                    total = d.get('total_bytes', 0) or 1000000  # fallback
+                    fake_stream = FakeStream(total)
+                    callback(fake_stream, None, 0)  # 0 bytes remaining = 100%
+                    
+            except Exception as e:
+                logger.error(f"Progress callback error: {e}")
         
         return progress_hook
     

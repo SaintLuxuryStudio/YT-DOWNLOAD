@@ -65,23 +65,47 @@ class TelegramYTBot:
         )
         return bool(youtube_regex.match(text))
     
-    def create_progress_callback(self, message_or_query):
+    def create_progress_callback(self, query, context):
+        progress_data = {'query': query, 'context': context, 'current_progress': 0}
         last_pct = [0]
         
         def progress_callback(stream, chunk, bytes_remaining):
-            total = stream.filesize
-            done = total - bytes_remaining
-            pct = int(done / total * 100)
-            
-            if pct > last_pct[0] and pct % 20 == 0:  # Обновляем каждые 20%
-                try:
-                    # Просто логируем прогресс, не обновляем сообщение в реальном времени
-                    logger.info(f"Download progress: {pct}%")
+            try:
+                total = stream.filesize
+                done = total - bytes_remaining
+                pct = int(done / total * 100)
+                
+                # Обновляем каждые 5%
+                if pct >= last_pct[0] + 5:
+                    progress_data['current_progress'] = pct
                     last_pct[0] = pct
-                except Exception as e:
-                    logger.error(f"Error updating progress: {e}")
+                    logger.info(f"Progress: {pct}%")
+            except Exception as e:
+                logger.error(f"Progress callback error: {e}")
         
+        progress_callback.progress_data = progress_data
         return progress_callback
+    
+    async def update_progress_periodically(self, progress_callback, query):
+        """Периодически обновляет прогресс в сообщении"""
+        last_shown_progress = 0
+        
+        while True:
+            try:
+                await asyncio.sleep(1)  # Проверяем каждую секунду
+                
+                current_progress = progress_callback.progress_data.get('current_progress', 0)
+                
+                # Показываем изменения прогресса каждые 5%
+                if current_progress >= last_shown_progress + 5:
+                    await query.edit_message_text(f"⏬ Скачивание: {current_progress}%")
+                    last_shown_progress = current_progress
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in progress update: {e}")
+                break
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_text = update.message.text
@@ -179,17 +203,28 @@ class TelegramYTBot:
             
             await query.edit_message_text("⏬ Начинаю скачивание...")
             
-            progress_callback = self.create_progress_callback(query)
+            progress_callback = self.create_progress_callback(query, context)
+            
+            # Запускаем периодическое обновление прогресса
+            progress_task = asyncio.create_task(self.update_progress_periodically(progress_callback, query))
             
             # Запускаем скачивание в отдельном потоке
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, 
-                self.downloader.download_video,
-                video_info['url'], 
-                resolution,
-                progress_callback
-            )
+            try:
+                result = await loop.run_in_executor(
+                    None, 
+                    self.downloader.download_video,
+                    video_info['url'], 
+                    resolution,
+                    progress_callback
+                )
+            finally:
+                # Останавливаем задачу обновления прогресса
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
             
             if not result:
                 await query.edit_message_text("❌ Ошибка при скачивании видео.")
